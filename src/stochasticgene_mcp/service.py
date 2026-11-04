@@ -14,7 +14,7 @@ import time
 import tomllib
 import uuid
 
-DEFAULT_STOCHASTICGENE_VERSION = "2.1.0"
+DEFAULT_STOCHASTICGENE_VERSION = "2.1.1"
 DEFAULT_HOME = Path("~/.stochasticgene-mcp").expanduser()
 DEFAULT_ENV = DEFAULT_HOME / "julia-env"
 MAX_DATA_BYTES = 50 * 1024 * 1024

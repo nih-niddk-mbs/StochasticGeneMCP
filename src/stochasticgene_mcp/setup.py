@@ -11,10 +11,13 @@ import tomllib
 from .service import DEFAULT_ENV, DEFAULT_HOME, DEFAULT_STOCHASTICGENE_VERSION
 
 # Values arrive through ARGS so nothing user-supplied is interpolated into code.
+# EnzymeCore is capped because DiffEqBase 6.218 (final release) fails to load its Enzyme
+# extension with EnzymeCore >= 0.8.27, printing an error on every Julia start.
 INSTALL_SCRIPT = """
 using Pkg
 mode, value = ARGS
-Pkg.add([PackageSpec(name="JSON"), PackageSpec(name="SHA")])
+Pkg.add([PackageSpec(name="JSON"), PackageSpec(name="SHA"), PackageSpec(name="EnzymeCore")])
+Pkg.compat("EnzymeCore", "0.8.18 - 0.8.26")
 if mode == "dev"
     Pkg.develop(path=value)
 else

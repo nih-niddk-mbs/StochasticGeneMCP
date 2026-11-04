@@ -41,7 +41,7 @@ python3 -m venv .venv
 ```
 
 `setup` creates a Julia environment in `~/.stochasticgene-mcp/julia-env` with
-StochasticGene pinned to an exact version (default 2.1.0) and writes
+StochasticGene pinned to an exact version (default 2.1.1) and writes
 `~/.stochasticgene-mcp/config.toml`. `input_roots` limit readable data and
 result folders; run records go to `jobs_root`, which must be outside them.
 
