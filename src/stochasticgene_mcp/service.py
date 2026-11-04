@@ -7,11 +7,22 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
 import tomllib
 import uuid
+
+DEFAULT_STOCHASTICGENE_VERSION = "2.1.0"
+DEFAULT_HOME = Path("~/.stochasticgene-mcp").expanduser()
+DEFAULT_ENV = DEFAULT_HOME / "julia-env"
+MAX_DATA_BYTES = 50 * 1024 * 1024
+NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -28,7 +39,7 @@ class Service:
     def __init__(self, config_file: str | Path):
         self.config_file = Path(config_file).expanduser().resolve(strict=True)
         self.config = tomllib.loads(self.config_file.read_text())
-        required = {"input_roots", "jobs_root", "julia", "julia_project", "expected_revision"}
+        required = {"input_roots", "jobs_root"}
         if not required <= self.config.keys():
             raise ValueError(f"Missing configuration fields: {sorted(required - self.config.keys())}")
         self.roots = [Path(p).expanduser().resolve(strict=True) for p in self.config["input_roots"]]
@@ -37,8 +48,12 @@ class Service:
         self.jobs = Path(self.config["jobs_root"]).expanduser().resolve()
         if any(self.jobs.is_relative_to(p) for p in self.roots):
             raise ValueError("jobs_root must be outside input_roots")
-        self.project = Path(self.config["julia_project"]).expanduser().resolve(strict=True)
-        self.julia = Path(self.config["julia"]).expanduser().resolve(strict=True)
+        # Default project is the environment created by `stochasticgene-mcp setup`.
+        self.project = Path(self.config.get("julia_project") or DEFAULT_ENV).expanduser().resolve(strict=True)
+        julia = self.config.get("julia") or shutil.which("julia")
+        if not julia:
+            raise ValueError("Julia was not found; set `julia` in the configuration")
+        self.julia = Path(julia).expanduser().resolve(strict=True)
         self.runner = Path(__file__).resolve().parents[2] / "julia" / "runner.jl"
         self.max_threads = self.config.get("max_threads", 8)
         self.timeout = self.config.get("timeout_seconds", 600)
@@ -46,7 +61,12 @@ class Service:
             raise ValueError("max_threads must be an integer from 1 to 64")
         if type(self.timeout) is not int or not 1 <= self.timeout <= 86400:
             raise ValueError("timeout_seconds must be an integer from 1 to 86400")
-        if not re.fullmatch(r"[a-f0-9]{40}", self.config["expected_revision"]):
+        self.version = str(self.config.get("stochasticgene_version", DEFAULT_STOCHASTICGENE_VERSION))
+        if not re.fullmatch(r"\d+\.\d+\.\d+", self.version):
+            raise ValueError("stochasticgene_version must look like 2.1.0")
+        # Optional: only for a development checkout that must match a commit.
+        self.revision = self.config.get("expected_revision")
+        if self.revision is not None and not re.fullmatch(r"[a-f0-9]{40}", self.revision):
             raise ValueError("expected_revision must be a full Git commit hash")
 
     def input_folder(self, folder: str) -> Path:
@@ -56,6 +76,17 @@ class Service:
         path = path.resolve(strict=True)
         if not path.is_dir() or not any(path.is_relative_to(root) for root in self.roots):
             raise ValueError("Input folder is outside the configured input_roots")
+        return path
+
+    def input_file(self, file: str) -> Path:
+        path = Path(file).expanduser()
+        if not path.is_absolute():
+            path = self.roots[0] / path
+        path = path.resolve(strict=True)
+        if not path.is_file() or not any(path.is_relative_to(root) for root in self.roots):
+            raise ValueError("Input file is outside the configured input_roots")
+        if path.stat().st_size > MAX_DATA_BYTES:
+            raise ValueError(f"Input file is larger than {MAX_DATA_BYTES // 2**20} MB")
         return path
 
     def _new_job(self) -> Path:
@@ -74,7 +105,7 @@ class Service:
 
     def _julia(self, job: Path, operation: str, payload: dict, threads: int) -> dict:
         request = {"protocol": 1, "operation": operation, "job_dir": str(job),
-                   "expected_revision": self.config["expected_revision"], **payload}
+                   "expected_version": self.version, "expected_revision": self.revision, **payload}
         request_file = job / f"{operation}.request.json"
         response_file = job / f"{operation}.response.json"
         atomic_json(request_file, request)
@@ -121,14 +152,73 @@ class Service:
         settings = dict(ratetype=ratetype, trace_center=trace_center, window_length=window_length,
                         frame_interval=frame_interval, maxlag=maxlag, threads=threads)
         prepared = self._julia(job, "prepare", {"folder": str(source), "settings": settings}, 1)
-        plan = {"run_id": job.name, "source": str(source), "settings": settings,
-                "prepared": prepared, "expected_revision": self.config["expected_revision"]}
+        plan = {"kind": "correlations", "run_id": job.name, "source": str(source), "settings": settings,
+                "prepared": prepared, "expected_version": self.version, "expected_revision": self.revision}
+        return self._awaiting_approval(job, plan, "Preparation only. No correlation computation has started.")
+
+    def prepare_fit_rna(self, data: str, name: str = "gene", G: int = 2, R: int = 0, S: int = 0,
+                        insertstep: int = 1, halflife: float | None = None, samplesteps: int = 100_000,
+                        nchains: int = 2, maxtime: float | None = None, threads: int = 4) -> dict:
+        source = self.input_file(data)
+        if maxtime is None:
+            maxtime = min(300.0, float(self.timeout))
+        if not NAME_PATTERN.fullmatch(name):
+            raise ValueError("name must be 1-64 letters, digits, '_' or '-', starting with a letter or digit")
+        for label, value, low, high in (("G", G, 1, 4), ("R", R, 0, 20), ("S", S, 0, 20),
+                                        ("insertstep", insertstep, 1, 21), ("nchains", nchains, 1, 16),
+                                        ("samplesteps", samplesteps, 1000, 10_000_000),
+                                        ("threads", threads, 1, self.max_threads)):
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError(f"{label} must be an integer from {low} to {high}")
+        if S > R or insertstep > max(R, 1):
+            raise ValueError("S cannot exceed R and insertstep cannot exceed R (use 1 when R is 0)")
+        if halflife is not None and (type(halflife) not in (int, float) or not math.isfinite(halflife) or halflife <= 0):
+            raise ValueError("halflife must be a positive number of minutes")
+        if type(maxtime) not in (int, float) or not math.isfinite(maxtime) or not 1 <= maxtime <= self.timeout:
+            raise ValueError(f"maxtime must be from 1 to timeout_seconds ({self.timeout}) seconds")
+        job = self._new_job()
+        (job / "inputs").mkdir(mode=0o700)
+        snapshot = job / "inputs" / f"{name}.txt"
+        sha = sha256_file(source)
+        shutil.copyfile(source, snapshot)
+        if sha256_file(snapshot) != sha:
+            raise RuntimeError("Input changed during preparation")
+        settings = dict(name=name, G=G, R=R, S=S, insertstep=insertstep, halflife=halflife,
+                        samplesteps=samplesteps, nchains=nchains, maxtime=float(maxtime), threads=threads)
+        prepared = self._julia(job, "prepare_fit", {"data_file": str(snapshot)}, 1)
+        prepared["snapshots"] = [{"source": str(source), "snapshot": str(snapshot.relative_to(job)), "sha256": sha}]
+        plan = {"kind": "fit_rna", "run_id": job.name, "source": str(source), "settings": settings,
+                "prepared": prepared, "expected_version": self.version, "expected_revision": self.revision}
+        return self._awaiting_approval(job, plan, "Preparation only. No fit has started.")
+
+    def describe_fit(self, target: str) -> dict:
+        """Summarize fitted rates for a completed run ID or a results folder under input_roots."""
+        if re.fullmatch(r"[a-f0-9]{32}", target):
+            found = sorted(p for p in (self._job(target) / "fit" / "results").glob("*") if p.is_dir())
+            if len(found) != 1:
+                raise ValueError("This run has no completed fit results")
+            folder = found[0]
+        else:
+            folder = self.input_folder(target)
+        job = self._new_job()
+        return {"description_id": job.name, **self._julia(job, "describe", {"folder": str(folder)}, 1)}
+
+    def wait(self, run_id: str, poll: float = 2.0) -> dict:
+        deadline = time.time() + self.timeout + 300
+        while time.time() < deadline:
+            status = self.run_status(run_id)
+            if status["state"] in {"completed", "failed"}:
+                return status
+            time.sleep(poll)
+        raise TimeoutError(f"Run {run_id} did not finish in time; check its status later")
+
+    def _awaiting_approval(self, job: Path, plan: dict, note: str) -> dict:
         atomic_json(job / "plan.json", plan)
         atomic_json(job / "status.json", {"state": "awaiting_approval", "created": time.time()})
         return {"run_id": job.name, "state": "awaiting_approval", "plan": plan,
                 "approval_command": [sys.executable, "-m", "stochasticgene_mcp.cli",
                                      "--config", str(self.config_file), "approve", job.name],
-                "note": "Preparation only. No correlation computation has started."}
+                "note": note}
 
     def approve(self, run_id: str) -> dict:
         # Not exposed as an MCP tool: a human runs this command locally.
@@ -155,8 +245,8 @@ class Service:
             approval = json.loads((job / "approval.json").read_text())
             if approval["plan_hash"] != digest(plan):
                 raise ValueError("Plan changed after approval; prepare a new run")
-            if plan["expected_revision"] != self.config["expected_revision"]:
-                raise ValueError("Configured revision changed; prepare a new run")
+            if (plan.get("expected_version"), plan.get("expected_revision")) != (self.version, self.revision):
+                raise ValueError("Configured StochasticGene version changed; prepare a new run")
             # One compute run at a time in this local prototype.
             with (self.jobs / "compute.lock").open("a") as lock:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

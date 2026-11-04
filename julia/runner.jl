@@ -11,13 +11,20 @@ function plain(x)
     return string(x)
 end
 
-function fingerprint(expected)
+function fingerprint(expected_version, expected_revision)
     root = dirname(dirname(pathof(SG)))
-    revision = strip(read(`git -C $root rev-parse HEAD`, String))
-    revision == expected || error("StochasticGene revision differs from the configured pin; review and prepare a new run")
-    isempty(strip(read(`git -C $root status --porcelain --untracked-files=no`, String))) ||
-        error("StochasticGene checkout has uncommitted changes; use a clean pinned checkout")
-    return Dict("revision"=>revision, "source"=>root, "julia_version"=>string(VERSION))
+    version = string(pkgversion(SG))
+    version == expected_version ||
+        error("StochasticGene $version differs from the configured version $expected_version; run setup or update the configuration")
+    runtime = Dict{String,Any}("version"=>version, "source"=>root, "julia_version"=>string(VERSION))
+    if expected_revision !== nothing
+        revision = strip(read(`git -C $root rev-parse HEAD`, String))
+        revision == expected_revision || error("StochasticGene revision differs from the configured pin; review and prepare a new run")
+        isempty(strip(read(`git -C $root status --porcelain --untracked-files=no`, String))) ||
+            error("StochasticGene checkout has uncommitted changes; use a clean pinned checkout")
+        runtime["revision"] = revision
+    end
+    return runtime
 end
 
 function inside(file, root)
@@ -95,13 +102,19 @@ function prepare(folder, job, settings, runtime)
         "rate_row"=>settings["ratetype"], "source_modified"=>false)
 end
 
-function compute(job, plan)
-    prepared, settings = plan["prepared"], plan["settings"]
-    prepared["runtime"]["revision"] == plan["expected_revision"] || error("Invalid plan revision")
+function verify_plan(job, plan)
+    prepared = plan["prepared"]
+    prepared["runtime"]["version"] == plan["expected_version"] || error("Invalid plan version")
     for item in prepared["snapshots"]
         file = inside(joinpath(job,item["snapshot"]),job)
         bytes2hex(sha256(read(file))) == item["sha256"] || error("Prepared input changed after approval")
     end
+    return prepared
+end
+
+function compute(job, plan)
+    prepared, settings = plan["prepared"], plan["settings"]
+    verify_plan(job, plan)
     results = inside(prepared["results_directory"],job)
     dt = Float64(settings["frame_interval"])
     elapsed = @elapsed nmodels = SG.write_correlation_functions_key(results;
@@ -118,21 +131,63 @@ function compute(job, plan)
         "outputs"=>sort(outputs),"results_directory"=>results,"threads"=>Threads.nthreads())
 end
 
+function table(df)
+    return [Dict{String,Any}(n => plain(df[i, n]) for n in names(df)) for i in 1:size(df, 1)]
+end
+
+function prepare_fit(data_file, runtime)
+    h = vec(SG.readfile(data_file)[:,1])
+    all(isfinite, h) && all(>=(0), h) || error("Histogram must contain finite, non-negative counts")
+    length(h) >= 4 || error("Histogram needs at least 4 bins (RNA copy numbers 0 to 3)")
+    cells = sum(h)
+    cells > 0 || error("Histogram is empty")
+    return Dict("runtime"=>runtime, "bins"=>length(h), "cells"=>cells,
+        "mean_rna"=>sum((0:length(h)-1) .* h) / cells, "max_rna"=>length(h) - 1)
+end
+
+function compute_fit_rna(job, plan)
+    prepared, s = plan["prepared"], plan["settings"]
+    verify_plan(job, plan)
+    file = inside(joinpath(job, prepared["snapshots"][1]["snapshot"]), job)
+    halflife = s["halflife"] === nothing ? nothing : Float64(s["halflife"])
+    elapsed = @elapsed result = SG.fit_rna(file; G=Int(s["G"]), R=Int(s["R"]), S=Int(s["S"]),
+        insertstep=Int(s["insertstep"]), name=String(s["name"]), halflife=halflife,
+        outdir=joinpath(job, "fit"), samplesteps=Int(s["samplesteps"]), nchains=Int(s["nchains"]),
+        maxtime=Float64(s["maxtime"]))
+    outputs = sort([joinpath(d, f) for (d, _, fs) in walkdir(result.resultdir) for f in fs])
+    return Dict("elapsed_seconds"=>elapsed, "results_directory"=>result.resultdir,
+        "rates"=>table(result.rates), "outputs"=>outputs, "threads"=>Threads.nthreads())
+end
+
+function describe(folder)
+    df = SG.fit_summary(folder)
+    bursts = sort([f for f in readdir(folder) if startswith(f, "burst_")])
+    return Dict("results_directory"=>folder, "rates"=>table(df), "burst_files"=>bursts)
+end
+
 function main(request_file, response_file)
     request = JSON.parsefile(request_file)
     request["protocol"] == 1 || error("Unsupported request protocol")
     job = realpath(request["job_dir"])
     inside(request_file,job)
     dirname(abspath(response_file)) == job || error("Response must stay in its run directory")
-    runtime = fingerprint(request["expected_revision"])
+    runtime = fingerprint(request["expected_version"], get(request, "expected_revision", nothing))
     operation = request["operation"]
     if operation == "inspect"
         records, skipped = inventory(realpath(request["folder"]))
         return Dict("runtime"=>runtime,"models"=>[r["summary"] for r in records],"warnings"=>skipped)
     elseif operation == "prepare"
         return prepare(realpath(request["folder"]),job,request["settings"],runtime)
+    elseif operation == "prepare_fit"
+        return prepare_fit(inside(request["data_file"], job), runtime)
+    elseif operation == "describe"
+        return describe(realpath(request["folder"]))
     elseif operation == "compute"
-        return compute(job,request["plan"])
+        plan = request["plan"]
+        kind = get(plan, "kind", "correlations")
+        kind == "correlations" && return compute(job, plan)
+        kind == "fit_rna" && return compute_fit_rna(job, plan)
+        error("Unsupported plan kind: $kind")
     end
     error("Unsupported operation: $operation")
 end

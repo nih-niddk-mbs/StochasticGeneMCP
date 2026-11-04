@@ -1,14 +1,21 @@
 # StochasticGeneMCP
 
-Local prototype of an MCP interface to StochasticGene.jl. Python handles MCP,
-approved paths and run lifecycle. Julia reads model specifications and calls
-the existing scientific functions. No LLM API key is needed by this server;
-the MCP host provides the agent.
+Local interface to StochasticGene.jl for people and agents. Python handles the
+command line, MCP, approved paths and run lifecycle. Julia reads model
+specifications and calls the existing scientific functions. No LLM API key is
+needed by this server; the MCP host provides the agent.
 
 ## Scope
 
-- `inspect_results`: inspect trusted key-based result folders.
-- `compute_correlations`: **prepare only** a frozen ON/reporter correlation run.
+Command line and MCP tools:
+
+- `fit-rna` / `prepare_fit_rna`: **prepare** a G-state fit to an RNA histogram
+  (frozen input, plan, resource limits); a person approves it with the CLI.
+- `describe` / `describe_fit`: fitted rates (per minute) for a finished run or a
+  results folder.
+- `inspect` / `inspect_results`: inspect trusted key-based result folders.
+- `correlations` / `compute_correlations`: **prepare** a frozen ON/reporter
+  correlation run for coupled models.
 - `run_status`: read persisted status and output paths.
 
 There is deliberately no MCP approval, arbitrary code, shell, package-install,
@@ -16,40 +23,67 @@ job-submission, or file-deletion tool. A separate local CLI command approves and
 starts computation. Configuring an MCP host with shell access does not exempt
 it from obtaining the user's approval before running that command.
 
-The first version supports local macOS/Linux execution, at most one computation
-at a time, and key-based coupled models, including hierarchical and hidden-unit
-models. It does not yet compute shared-dataset correlations, fit models, submit
-HPC jobs, or expose arbitrary observable pairs. Inspection is limited to 256
-info files per request. No existing source results are rewritten.
+The server supports local macOS/Linux execution and at most one computation at
+a time. Fits cover steady-state RNA histograms; correlations cover key-based
+coupled models, including hierarchical and hidden-unit models. It does not yet
+fit traces, compute shared-dataset correlations, submit HPC jobs, or expose
+arbitrary observable pairs. Inspection is limited to 256 info files per request.
+No existing source results are rewritten.
 
 ## Install
 
-Use Python 3.11 or newer and Julia 1.11. Use a clean StochasticGene checkout at
-commit `b3d94c9d307708b2085f3978b5492f2391c87814` for this prototype. These features
-are newer than the registered release; installing the release alone is not enough.
+Use Python 3.11 or newer and Julia 1.11.
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[test]'
-cp config.example.toml config.local.toml
+.venv/bin/stochasticgene-mcp setup --input-root /path/to/your/data
 ```
 
-Edit `config.local.toml` with absolute paths. `input_roots` limit readable result
-folders. `jobs_root` must be outside those roots. The configured Julia project
-is the pinned StochasticGene checkout, with its dependencies already installed.
-The companion `julia/Project.toml` records dependencies and the source pin;
-the first prototype verifies a clean Git checkout at runtime.
-`requirements.lock` records the dependency versions tested on the development
-Mac; use it as pip constraints when reproducing that environment.
+`setup` creates a Julia environment in `~/.stochasticgene-mcp/julia-env` with
+StochasticGene pinned to an exact version (default 2.1.0) and writes
+`~/.stochasticgene-mcp/config.toml`. `input_roots` limit readable data and
+result folders; run records go to `jobs_root`, which must be outside them.
 
-This is an editable-source installation. `julia/runner.jl` must remain beside
-the Python source tree. A standalone wheel is not supported yet.
-
-## Try It Without an Agent
+To change the pinned version, run `setup` again:
 
 ```sh
-.venv/bin/stochasticgene-mcp --config config.local.toml inspect RESULTS_FOLDER
-.venv/bin/stochasticgene-mcp --config config.local.toml prepare RESULTS_FOLDER --threads 8
+.venv/bin/stochasticgene-mcp setup --version 2.2.0
+```
+
+For a development checkout, use `setup --dev /path/to/StochasticGene.jl`; the
+configuration then records the checkout's version. Plans prepared under one
+version are rejected after the pin changes; prepare them again.
+`requirements.lock` records the Python dependency versions tested on the
+development Mac; use it as pip constraints when reproducing that environment.
+
+This is an editable-source installation. `julia/runner.jl` must remain beside
+the Python source tree. A standalone wheel is not supported yet. Use
+`--config FILE` or `STOCHASTICGENE_MCP_CONFIG` for a configuration elsewhere;
+`config.example.toml` lists every field.
+
+## Fit an RNA Histogram
+
+The data file's first column is the number of cells at each RNA copy number
+(0, 1, 2, ...). It must be inside an input root.
+
+```sh
+.venv/bin/stochasticgene-mcp fit-rna hist.txt --name MYC --G 2 --halflife 600 --wait
+```
+
+`--halflife` is the mRNA half-life in minutes; without it the decay rate is 1.0
+per minute and rates are meaningful only relative to decay. `--wait` approves
+the run, waits and prints the rates. Without `--yes` or `--wait` the command only
+prepares the run and prints the plan; approve it later with `approve RUN_ID`.
+Show results again with `describe RUN_ID`. The default 100,000 samples is a
+starting point: check R-hat and ESS in the run's `fit/` output and raise
+`--samplesteps` if needed.
+
+## Analyze Existing Results
+
+```sh
+.venv/bin/stochasticgene-mcp inspect RESULTS_FOLDER
+.venv/bin/stochasticgene-mcp correlations RESULTS_FOLDER --threads 8
 ```
 
 `RESULTS_FOLDER` may be absolute or relative to the first input root. Preparation
@@ -59,15 +93,15 @@ the channel order, selected rate row, centering, frame interval and resource lim
 Then use the returned run ID:
 
 ```sh
-.venv/bin/stochasticgene-mcp --config config.local.toml approve RUN_ID
-.venv/bin/stochasticgene-mcp --config config.local.toml status RUN_ID
+.venv/bin/stochasticgene-mcp approve RUN_ID
+.venv/bin/stochasticgene-mcp status RUN_ID
 ```
 
 Approval starts a bounded local worker and returns immediately. Julia logs,
 requests, responses, approval and status are saved in the run directory. The
-worker checks the approved plan, frozen inputs and pinned revision before
-computing. Altered plans/inputs are rejected. Completed outputs are standard
-StochasticGene CSVs under that run's `results/` directory.
+worker checks the approved plan, frozen inputs and pinned StochasticGene
+version before computing. Altered plans/inputs are rejected. Completed outputs
+are standard StochasticGene files under that run's directory.
 
 Only one compute job runs at once. An approval attempted during another run
 fails rather than queuing. There is no automatic retry or cancellation tool.
@@ -83,7 +117,7 @@ Launch the server over stdio; no network listener is needed:
   "mcpServers": {
     "stochasticgene": {
       "command": "/absolute/path/to/StochasticGeneMCP/.venv/bin/stochasticgene-mcp",
-      "args": ["--config", "/absolute/path/to/config.local.toml", "serve"]
+      "args": ["--config", "/absolute/path/to/config.toml", "serve"]
     }
   }
 }
@@ -105,8 +139,8 @@ which creates snapshots, and keep actual execution behind human CLI approval.
 - Outputs are unnormalized covariances in `_centered` columns; raw-moment
   columns retain their original meaning. This does not claim equivalence with
   an empirical per-trace normalized IDL estimator.
-- The source revision is checked before preparation and execution. Updating
-  StochasticGene requires deliberate revalidation and changing the pin.
+- The StochasticGene version is checked before preparation and execution.
+  Updating it requires deliberate revalidation: run `setup --version`.
 - Source input files are never replaced. Output paths are generated per run,
   not chosen by the model. Symlink escapes, invalid paths and excessive threads
   are rejected. The server has ordinary user privileges, not an OS sandbox.

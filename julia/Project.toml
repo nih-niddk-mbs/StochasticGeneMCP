@@ -1,10 +1,10 @@
+# Reference environment. `stochasticgene-mcp setup` builds the real one and pins StochasticGene exactly.
 [deps]
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 StochasticGene = "a2598c62-e771-4eb8-9887-959a94ab00ef"
-
-[sources]
-StochasticGene = {url = "https://github.com/nih-niddk-mbs/StochasticGene.jl.git", rev = "b3d94c9d307708b2085f3978b5492f2391c87814"}
 
 [compat]
 julia = "1.11"
 JSON = "0.21"
+StochasticGene = "2.1"

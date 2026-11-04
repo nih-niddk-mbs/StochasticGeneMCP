@@ -1,8 +1,11 @@
+# Normally written by: stochasticgene-mcp setup --input-root /path/to/your/data
 # Trusted local files only. JLD2 deserialization is not a security sandbox.
-input_roots = ["/absolute/path/to/nadya/results"]
+input_roots = ["/absolute/path/to/your/data-and-results"]
 jobs_root = "/absolute/path/to/StochasticGeneMCP/runs"
-julia = "/absolute/path/to/julia"
-julia_project = "/absolute/path/to/StochasticGene.jl"
-expected_revision = "b3d94c9d307708b2085f3978b5492f2391c87814"
+# Pinned StochasticGene release. Change with: stochasticgene-mcp setup --version X.Y.Z
+stochasticgene_version = "2.1.0"
+# julia = "/absolute/path/to/julia"            # default: julia on PATH
+# julia_project = "/absolute/path/to/env"      # default: ~/.stochasticgene-mcp/julia-env
+# expected_revision = "<40-character commit>"  # only for a development checkout
 max_threads = 8
 timeout_seconds = 600
