@@ -11,6 +11,8 @@ Command line and MCP tools:
 
 - `fit-rna` / `prepare_fit_rna`: **prepare** a G-state fit to an RNA histogram
   (frozen input, plan, resource limits); a person approves it with the CLI.
+- `fit-traces` / `prepare_fit_traces`: the same for a folder of live-cell trace
+  files (needs StochasticGene 2.2.0 or newer).
 - `describe` / `describe_fit`: fitted rates (per minute) for a finished run or a
   results folder.
 - `inspect` / `inspect_results`: inspect trusted key-based result folders.
@@ -78,6 +80,24 @@ prepares the run and prints the plan; approve it later with `approve RUN_ID`.
 Show results again with `describe RUN_ID`. The default 100,000 samples is a
 starting point: check R-hat and ESS in the run's `fit/` output and raise
 `--samplesteps` if needed.
+
+## Fit Live-Cell Traces
+
+Point `fit-traces` at a folder of trace files (inside an input root): one file per
+trace, one frame per row, intensity in column 3 by default (`--datacol` to change).
+This needs StochasticGene 2.2.0 or newer (`setup --version 2.2.0`).
+
+```sh
+.venv/bin/stochasticgene-mcp fit-traces traces/ --name MYC --G 2 --R 1 --interval 1.0 --halflife 600 --wait
+```
+
+`--interval` is the frame interval in minutes and `R` must be at least 1. By default
+each trace is median-subtracted and scaled; use `--raw-intensity` for raw values
+(then the default noise priors do not apply, so use the Julia API to set them).
+Trace fits are slower than histogram fits and need many more samples than the
+default 10,000 for real data; check R-hat in the run's `fit/` output. See
+[Choose a model and data](https://nih-niddk-mbs.github.io/StochasticGene.jl/dev/choosing_a_model.html)
+for model choice, units and file formats.
 
 ## Analyze Existing Results
 

@@ -18,6 +18,7 @@ DEFAULT_STOCHASTICGENE_VERSION = "2.1.1"
 DEFAULT_HOME = Path("~/.stochasticgene-mcp").expanduser()
 DEFAULT_ENV = DEFAULT_HOME / "julia-env"
 MAX_DATA_BYTES = 50 * 1024 * 1024
+MAX_TRACE_FILES = 2000
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
@@ -160,6 +161,23 @@ class Service:
                         insertstep: int = 1, halflife: float | None = None, samplesteps: int = 100_000,
                         nchains: int = 2, maxtime: float | None = None, threads: int = 4) -> dict:
         source = self.input_file(data)
+        maxtime = self._check_fit(name, G, R, S, insertstep, halflife, samplesteps, nchains, maxtime, threads)
+        job = self._new_job()
+        (job / "inputs").mkdir(mode=0o700)
+        snapshot = job / "inputs" / f"{name}.txt"
+        sha = sha256_file(source)
+        shutil.copyfile(source, snapshot)
+        if sha256_file(snapshot) != sha:
+            raise RuntimeError("Input changed during preparation")
+        settings = dict(name=name, G=G, R=R, S=S, insertstep=insertstep, halflife=halflife,
+                        samplesteps=samplesteps, nchains=nchains, maxtime=float(maxtime), threads=threads)
+        prepared = self._julia(job, "prepare_fit", {"data_file": str(snapshot)}, 1)
+        prepared["snapshots"] = [{"source": str(source), "snapshot": str(snapshot.relative_to(job)), "sha256": sha}]
+        plan = {"kind": "fit_rna", "run_id": job.name, "source": str(source), "settings": settings,
+                "prepared": prepared, "expected_version": self.version, "expected_revision": self.revision}
+        return self._awaiting_approval(job, plan, "Preparation only. No fit has started.")
+
+    def _check_fit(self, name, G, R, S, insertstep, halflife, samplesteps, nchains, maxtime, threads) -> float:
         if maxtime is None:
             maxtime = min(300.0, float(self.timeout))
         if not NAME_PATTERN.fullmatch(name):
@@ -176,18 +194,47 @@ class Service:
             raise ValueError("halflife must be a positive number of minutes")
         if type(maxtime) not in (int, float) or not math.isfinite(maxtime) or not 1 <= maxtime <= self.timeout:
             raise ValueError(f"maxtime must be from 1 to timeout_seconds ({self.timeout}) seconds")
+        return float(maxtime)
+
+    def prepare_fit_traces(self, data: str, name: str = "gene", G: int = 2, R: int = 1, S: int = 0,
+                           insertstep: int = 1, interval: float = 1.0, halflife: float | None = None,
+                           samplesteps: int = 10_000, nchains: int = 2, maxtime: float | None = None,
+                           threads: int = 4, zeromedian: bool = True, datacol: int = 3) -> dict:
+        """Prepare a fit to a folder of trace files (one frame per row, intensity in column `datacol`)."""
+        if tuple(int(v) for v in self.version.split(".")) < (2, 2, 0):
+            raise ValueError("Trace fits need StochasticGene 2.2.0 or newer; run: stochasticgene-mcp setup --version 2.2.0")
+        source = self.input_folder(data)
+        maxtime = self._check_fit(name, G, R, S, insertstep, halflife, samplesteps, nchains, maxtime, threads)
+        if R < 1:
+            raise ValueError("Trace fits need R of at least 1")
+        if type(interval) not in (int, float) or not math.isfinite(interval) or interval <= 0:
+            raise ValueError("interval must be a positive number of minutes")
+        if type(zeromedian) is not bool:
+            raise ValueError("zeromedian must be Boolean")
+        if type(datacol) is not int or not 1 <= datacol <= 20:
+            raise ValueError("datacol must be an integer from 1 to 20")
+        files = sorted(p for p in source.rglob("*") if p.is_file() and not p.is_symlink() and not p.name.startswith("."))
+        if not files:
+            raise ValueError("No trace files found in the folder")
+        if len(files) > MAX_TRACE_FILES or sum(p.stat().st_size for p in files) > MAX_DATA_BYTES:
+            raise ValueError(f"Trace folder is limited to {MAX_TRACE_FILES} files and {MAX_DATA_BYTES // 2**20} MB")
         job = self._new_job()
-        (job / "inputs").mkdir(mode=0o700)
-        snapshot = job / "inputs" / f"{name}.txt"
-        sha = sha256_file(source)
-        shutil.copyfile(source, snapshot)
-        if sha256_file(snapshot) != sha:
-            raise RuntimeError("Input changed during preparation")
-        settings = dict(name=name, G=G, R=R, S=S, insertstep=insertstep, halflife=halflife,
-                        samplesteps=samplesteps, nchains=nchains, maxtime=float(maxtime), threads=threads)
-        prepared = self._julia(job, "prepare_fit", {"data_file": str(snapshot)}, 1)
-        prepared["snapshots"] = [{"source": str(source), "snapshot": str(snapshot.relative_to(job)), "sha256": sha}]
-        plan = {"kind": "fit_rna", "run_id": job.name, "source": str(source), "settings": settings,
+        folder = job / "inputs" / "traces"
+        folder.mkdir(parents=True, mode=0o700)
+        snapshots = []
+        for index, path in enumerate(files, 1):
+            target = folder / f"{index:05d}.txt"
+            sha = sha256_file(path)
+            shutil.copyfile(path, target)
+            if sha256_file(target) != sha:
+                raise RuntimeError(f"Input changed during preparation: {path}")
+            snapshots.append({"source": str(path), "snapshot": str(target.relative_to(job)), "sha256": sha})
+        settings = dict(name=name, G=G, R=R, S=S, insertstep=insertstep, interval=float(interval), halflife=halflife,
+                        samplesteps=samplesteps, nchains=nchains, maxtime=maxtime, threads=threads,
+                        zeromedian=zeromedian, datacol=datacol)
+        prepared = self._julia(job, "prepare_fit_traces", {"folder": str(folder), "datacol": datacol}, 1)
+        prepared["snapshots"] = snapshots
+        plan = {"kind": "fit_traces", "run_id": job.name, "source": str(source), "settings": settings,
                 "prepared": prepared, "expected_version": self.version, "expected_revision": self.revision}
         return self._awaiting_approval(job, plan, "Preparation only. No fit has started.")
 

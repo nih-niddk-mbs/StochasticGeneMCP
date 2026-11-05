@@ -159,6 +159,37 @@ function compute_fit_rna(job, plan)
         "rates"=>table(result.rates), "outputs"=>outputs, "threads"=>Threads.nthreads())
 end
 
+function prepare_fit_traces(folder, datacol, runtime)
+    files = sort([joinpath(d, f) for (d, _, fs) in walkdir(folder) for f in fs])
+    isempty(files) && error("No trace files found")
+    lengths = Int[]
+    for file in files
+        t = SG.readfile(file)
+        size(t, 2) >= datacol || error("A trace file has fewer than $datacol columns: " * basename(file))
+        v = t[:, datacol]
+        all(isfinite, v) || error("Trace values must be finite")
+        length(v) >= 10 || error("Each trace needs at least 10 frames")
+        push!(lengths, length(v))
+    end
+    return Dict("runtime"=>runtime, "traces"=>length(files), "mean_frames"=>sum(lengths) / length(lengths),
+        "min_frames"=>minimum(lengths), "max_frames"=>maximum(lengths))
+end
+
+function compute_fit_traces(job, plan)
+    prepared, s = plan["prepared"], plan["settings"]
+    verify_plan(job, plan)
+    folder = inside(joinpath(job, "inputs", "traces"), job)
+    halflife = s["halflife"] === nothing ? nothing : Float64(s["halflife"])
+    elapsed = @elapsed result = SG.fit_traces(folder; G=Int(s["G"]), R=Int(s["R"]), S=Int(s["S"]),
+        insertstep=Int(s["insertstep"]), name=String(s["name"]), interval=Float64(s["interval"]),
+        halflife=halflife, zeromedian=Bool(s["zeromedian"]), datacol=Int(s["datacol"]),
+        outdir=joinpath(job, "fit"), samplesteps=Int(s["samplesteps"]), nchains=Int(s["nchains"]),
+        maxtime=Float64(s["maxtime"]))
+    outputs = sort([joinpath(d, f) for (d, _, fs) in walkdir(result.resultdir) for f in fs])
+    return Dict("elapsed_seconds"=>elapsed, "results_directory"=>result.resultdir,
+        "rates"=>table(result.rates), "outputs"=>outputs, "threads"=>Threads.nthreads())
+end
+
 function describe(folder)
     df = SG.fit_summary(folder)
     bursts = sort([f for f in readdir(folder) if startswith(f, "burst_")])
@@ -180,6 +211,8 @@ function main(request_file, response_file)
         return prepare(realpath(request["folder"]),job,request["settings"],runtime)
     elseif operation == "prepare_fit"
         return prepare_fit(inside(request["data_file"], job), runtime)
+    elseif operation == "prepare_fit_traces"
+        return prepare_fit_traces(inside(request["folder"], job), Int(request["datacol"]), runtime)
     elseif operation == "describe"
         return describe(realpath(request["folder"]))
     elseif operation == "compute"
@@ -187,6 +220,7 @@ function main(request_file, response_file)
         kind = get(plan, "kind", "correlations")
         kind == "correlations" && return compute(job, plan)
         kind == "fit_rna" && return compute_fit_rna(job, plan)
+        kind == "fit_traces" && return compute_fit_traces(job, plan)
         error("Unsupported plan kind: $kind")
     end
     error("Unsupported operation: $operation")

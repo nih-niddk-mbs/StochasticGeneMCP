@@ -34,6 +34,17 @@ def create_server(service: Service) -> MCPServer:
         return await asyncio.to_thread(service.prepare_fit_rna, data, name, G, R, S, insertstep, halflife,
                                        samplesteps, nchains, maxtime, threads)
 
+    @server.tool(structured_output=True, annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False})
+    async def prepare_fit_traces(folder: str, name: str = "gene", G: int = 2, R: int = 1, S: int = 0,
+                                 insertstep: int = 1, interval: float = 1.0, halflife: float | None = None,
+                                 samplesteps: int = 10000, nchains: int = 2, maxtime: float | None = None,
+                                 threads: int = 4, zeromedian: bool = True, datacol: int = 3) -> dict[str, Any]:
+        """Prepare a fit to a folder of live-cell trace files under the configured input roots. Interval and
+        halflife are in minutes; R must be at least 1. Preparation only; a person must approve the run with the
+        CLI before it starts."""
+        return await asyncio.to_thread(service.prepare_fit_traces, folder, name, G, R, S, insertstep, interval,
+                                       halflife, samplesteps, nchains, maxtime, threads, zeromedian, datacol)
+
     @server.tool(structured_output=True, annotations={"readOnlyHint": True, "openWorldHint": False})
     async def describe_fit(target: str) -> dict[str, Any]:
         """Return fitted rates (per minute) for a completed run ID or a results folder under the input roots."""

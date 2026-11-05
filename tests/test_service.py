@@ -8,7 +8,7 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
 from stochasticgene_mcp.server import create_server
-from stochasticgene_mcp.service import Service, atomic_json, digest
+from stochasticgene_mcp.service import Service, atomic_json, digest, sha256_file
 
 
 @pytest.fixture
@@ -148,13 +148,62 @@ def test_setup_config_roundtrip(tmp_path):
     assert tomllib.loads((tmp_path / "c.toml").read_text()) == values
 
 
+def trace_folder(service, count=3):
+    folder = service.roots[0] / "traces"
+    folder.mkdir(exist_ok=True)
+    for i in range(count):
+        (folder / f"t{i}.txt").write_text("".join(f"{k} {k} {0.1 * k}\n" for k in range(1, 21)))
+    return folder
+
+
+def test_trace_fit_needs_new_version(service):
+    with pytest.raises(ValueError, match="2.2.0"):
+        service.prepare_fit_traces(str(trace_folder(service)))
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"R": 0}, {"interval": 0}, {"interval": float("nan")}, {"datacol": 0}, {"zeromedian": "yes"},
+    {"G": 5}, {"halflife": -1}, {"name": "../x"}, {"samplesteps": 10},
+])
+def test_reject_trace_settings(service, kwargs):
+    service.version = "2.2.0"
+    with pytest.raises(ValueError):
+        service.prepare_fit_traces(str(trace_folder(service)), **kwargs)
+
+
+def test_trace_folder_must_be_inside_roots(service, tmp_path):
+    service.version = "2.2.0"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with pytest.raises(ValueError):
+        service.prepare_fit_traces(str(outside))
+
+
+def test_trace_preparation_snapshots_and_does_not_compute(service, monkeypatch):
+    service.version = "2.2.0"
+    operations = []
+    def julia(job, operation, payload, threads):
+        operations.append(operation)
+        return {"traces": 3, "runtime": {"version": "2.2.0"}}
+    monkeypatch.setattr(service, "_julia", julia)
+    result = service.prepare_fit_traces(str(trace_folder(service)), name="MYC", interval=2.0, halflife=600)
+    assert operations == ["prepare_fit_traces"]
+    plan = result["plan"]
+    assert plan["kind"] == "fit_traces" and plan["settings"]["interval"] == 2.0
+    job = service._job(result["run_id"])
+    snapshots = plan["prepared"]["snapshots"]
+    assert len(snapshots) == 3
+    assert all(sha256_file(job / s["snapshot"]) == s["sha256"] for s in snapshots)
+    assert not (job / "approval.json").exists()
+
+
 def test_mcp_tools_and_calls(service, monkeypatch):
     monkeypatch.setattr(service, "inspect_results", lambda folder: {"folder": folder, "models": []})
     async def run():
         async with Client(create_server(service)) as client:
             tools = await client.list_tools()
             assert {tool.name for tool in tools.tools} == {"inspect_results", "compute_correlations", "run_status",
-                                                           "prepare_fit_rna", "describe_fit"}
+                                                           "prepare_fit_rna", "prepare_fit_traces", "describe_fit"}
             result = await client.call_tool("inspect_results", {"folder": "example"})
             assert not result.is_error
             assert result.structured_content["folder"] == "example"
@@ -169,7 +218,7 @@ def test_stdio_roundtrip(service):
             "--config", str(service.config_file), "serve"])
         async with Client(transport) as client:
             tools = await client.list_tools()
-            assert len(tools.tools) == 5
+            assert len(tools.tools) == 6
             result = await client.call_tool("run_status", {"run_id": "not-a-run"})
             assert result.is_error
     asyncio.run(run())
