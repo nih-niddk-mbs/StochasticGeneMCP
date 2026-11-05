@@ -12,7 +12,7 @@ Command line and MCP tools:
 - `fit-rna` / `prepare_fit_rna`: **prepare** a G-state fit to an RNA histogram
   (frozen input, plan, resource limits); a person approves it with the CLI.
 - `fit-traces` / `prepare_fit_traces`: the same for a folder of live-cell trace
-  files (needs StochasticGene 2.2.0 or newer).
+  files (needs StochasticGene 2.2.0 or newer, the default pin).
 - `describe` / `describe_fit`: fitted rates (per minute) for a finished run or a
   results folder.
 - `inspect` / `inspect_results`: inspect trusted key-based result folders.
@@ -43,7 +43,7 @@ python3 -m venv .venv
 ```
 
 `setup` creates a Julia environment in `~/.stochasticgene-mcp/julia-env` with
-StochasticGene pinned to an exact version (default 2.1.1) and writes
+StochasticGene pinned to an exact version (default 2.2.0) and writes
 `~/.stochasticgene-mcp/config.toml`. `input_roots` limit readable data and
 result folders; run records go to `jobs_root`, which must be outside them.
 

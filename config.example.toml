@@ -3,7 +3,7 @@
 input_roots = ["/absolute/path/to/your/data-and-results"]
 jobs_root = "/absolute/path/to/StochasticGeneMCP/runs"
 # Pinned StochasticGene release. Change with: stochasticgene-mcp setup --version X.Y.Z
-stochasticgene_version = "2.1.1"
+stochasticgene_version = "2.2.0"
 # julia = "/absolute/path/to/julia"            # default: julia on PATH
 # julia_project = "/absolute/path/to/env"      # default: ~/.stochasticgene-mcp/julia-env
 # expected_revision = "<40-character commit>"  # only for a development checkout
