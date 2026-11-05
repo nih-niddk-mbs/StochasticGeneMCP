@@ -55,7 +55,7 @@ class Service:
         if not julia:
             raise ValueError("Julia was not found; set `julia` in the configuration")
         self.julia = Path(julia).expanduser().resolve(strict=True)
-        self.runner = Path(__file__).resolve().parents[2] / "julia" / "runner.jl"
+        self.runner = Path(__file__).resolve().parent / "julia" / "runner.jl"
         self.max_threads = self.config.get("max_threads", 8)
         self.timeout = self.config.get("timeout_seconds", 600)
         if type(self.max_threads) is not int or not 1 <= self.max_threads <= 64:

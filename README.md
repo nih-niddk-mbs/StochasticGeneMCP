@@ -28,7 +28,7 @@ it from obtaining the user's approval before running that command.
 The server supports local macOS/Linux execution and at most one computation at
 a time. Fits cover steady-state RNA histograms; correlations cover key-based
 coupled models, including hierarchical and hidden-unit models. It does not yet
-fit traces, compute shared-dataset correlations, submit HPC jobs, or expose
+compute shared-dataset correlations, submit HPC jobs, or expose
 arbitrary observable pairs. Inspection is limited to 256 info files per request.
 No existing source results are rewritten.
 
@@ -59,8 +59,7 @@ version are rejected after the pin changes; prepare them again.
 `requirements.lock` records the Python dependency versions tested on the
 development Mac; use it as pip constraints when reproducing that environment.
 
-This is an editable-source installation. `julia/runner.jl` must remain beside
-the Python source tree. A standalone wheel is not supported yet. Use
+This package is installable as a standard wheel; `runner.jl` ships inside it. Use
 `--config FILE` or `STOCHASTICGENE_MCP_CONFIG` for a configuration elsewhere;
 `config.example.toml` lists every field.
 
