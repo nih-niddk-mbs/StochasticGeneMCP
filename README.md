@@ -43,7 +43,7 @@ python3 -m venv .venv
 ```
 
 `setup` creates a Julia environment in `~/.stochasticgene-mcp/julia-env` with
-StochasticGene pinned to an exact version (default 2.2.0) and writes
+StochasticGene pinned to an exact version (default 2.2.1) and writes
 `~/.stochasticgene-mcp/config.toml`. `input_roots` limit readable data and
 result folders; run records go to `jobs_root`, which must be outside them.
 
@@ -93,8 +93,9 @@ This needs StochasticGene 2.2.0 or newer (`setup --version 2.2.0`).
 `--interval` is the frame interval in minutes and `R` must be at least 1. By default
 each trace is median-subtracted and scaled; use `--raw-intensity` for raw values
 (then the default noise priors do not apply, so use the Julia API to set them).
-Trace fits are slower than histogram fits and need many more samples than the
-default 10,000 for real data; check R-hat in the run's `fit/` output. See
+Trace fits are slower than histogram fits. The default is 40,000 warmup and 40,000
+sampling steps per chain, which is a starting point; use many more for real data and
+check R-hat in the run's `fit/` output. See
 [Choose a model and data](https://nih-niddk-mbs.github.io/StochasticGene.jl/dev/choosing_a_model.html)
 for model choice, units and file formats.
 
