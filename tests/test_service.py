@@ -197,6 +197,26 @@ def test_trace_preparation_snapshots_and_does_not_compute(service, monkeypatch):
     assert not (job / "approval.json").exists()
 
 
+def test_tool_errors_explain_the_problem(service):
+    async def run():
+        async with Client(create_server(service)) as client:
+            bad = await client.call_tool("prepare_fit_rna", {"data": str(histogram(service)), "G": 9})
+            assert bad.is_error and "must be an integer from 1 to 4" in bad.content[0].text
+            missing = await client.call_tool("run_status", {"run_id": "0" * 32})
+            assert missing.is_error and "not found" in missing.content[0].text
+    asyncio.run(run())
+
+
+def test_cli_prints_a_message_not_a_traceback(service):
+    import subprocess
+    command = [sys.executable, "-m", "stochasticgene_mcp.cli", "--config", str(service.config_file)]
+    for args in (["fit-rna", "nosuchfile.txt"], ["status", "0" * 32], ["describe", "nothing"]):
+        result = subprocess.run(command + args, capture_output=True, text=True)
+        assert result.returncode != 0
+        assert result.stderr.startswith("error:"), result.stderr
+        assert "Traceback" not in result.stderr
+
+
 def test_mcp_tools_and_calls(service, monkeypatch):
     monkeypatch.setattr(service, "inspect_results", lambda folder: {"folder": folder, "models": []})
     async def run():

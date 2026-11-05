@@ -14,7 +14,7 @@ import time
 import tomllib
 import uuid
 
-DEFAULT_STOCHASTICGENE_VERSION = "2.2.0"
+DEFAULT_STOCHASTICGENE_VERSION = "2.2.1"
 DEFAULT_HOME = Path("~/.stochasticgene-mcp").expanduser()
 DEFAULT_ENV = DEFAULT_HOME / "julia-env"
 MAX_DATA_BYTES = 50 * 1024 * 1024
@@ -198,7 +198,7 @@ class Service:
 
     def prepare_fit_traces(self, data: str, name: str = "gene", G: int = 2, R: int = 1, S: int = 0,
                            insertstep: int = 1, interval: float = 1.0, halflife: float | None = None,
-                           samplesteps: int = 10_000, nchains: int = 2, maxtime: float | None = None,
+                           samplesteps: int = 40_000, nchains: int = 2, maxtime: float | None = None,
                            threads: int = 4, zeromedian: bool = True, datacol: int = 3) -> dict:
         """Prepare a fit to a folder of trace files (one frame per row, intensity in column `datacol`)."""
         if tuple(int(v) for v in self.version.split(".")) < (2, 2, 0):

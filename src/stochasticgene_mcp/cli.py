@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 from .service import DEFAULT_HOME, Service
@@ -75,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     traces.add_argument("--halflife", type=float, help="mRNA half-life in minutes (default: decay rate 1.0 per minute)")
     traces.add_argument("--datacol", type=int, default=3, help="column holding intensity (default 3)")
     traces.add_argument("--raw-intensity", action="store_true", help="do not median-subtract and scale each trace")
-    traces.add_argument("--samplesteps", type=int, default=10_000)
+    traces.add_argument("--samplesteps", type=int, default=40_000)
     traces.add_argument("--nchains", type=int, default=2)
     traces.add_argument("--maxtime", type=float, help="wall-clock limit in seconds (default: 300 or timeout_seconds, whichever is smaller)")
     traces.add_argument("--threads", type=int, default=4)
@@ -107,6 +108,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    try:
+        _main(args)
+    except FileNotFoundError as error:
+        sys.exit(f"error: not found: {error.filename or error}")
+    except subprocess.CalledProcessError:
+        sys.exit("error: a Julia command failed; see the messages above")
+    except (ValueError, RuntimeError, TimeoutError) as error:
+        sys.exit(f"error: {error}")
+
+
+def _main(args) -> None:
     if args.command == "setup":
         from .setup import setup
         result = setup(Path(args.config).expanduser(), args.version, args.dev, args.julia, args.env,
