@@ -16,12 +16,14 @@ from .service import DEFAULT_ENV, DEFAULT_HOME, DEFAULT_STOCHASTICGENE_VERSION
 INSTALL_SCRIPT = """
 using Pkg
 mode, value = ARGS
-Pkg.add([PackageSpec(name="JSON"), PackageSpec(name="SHA"), PackageSpec(name="EnzymeCore")])
+mode == "registry" && Pkg.Registry.update()
+Pkg.add([PackageSpec(name="JSON"), PackageSpec(name="SHA"),
+         PackageSpec(name="EnzymeCore", version=Pkg.Types.VersionSpec("0.8.18 - 0.8.26"))])
 Pkg.compat("EnzymeCore", "0.8.18 - 0.8.26")
 if mode == "dev"
     Pkg.develop(path=value)
 else
-    Pkg.add(name="StochasticGene", version="=" * value)
+    Pkg.add(name="StochasticGene", version=VersionNumber(value))
 end
 Pkg.instantiate()
 using StochasticGene
